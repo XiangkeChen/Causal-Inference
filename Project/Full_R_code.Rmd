@@ -1,0 +1,671 @@
+---
+title: "Causal Inference Project - Appendix"
+author: "Sam Musch, Pardha Pitchikala, Patrick Seng, Sameeksha Aithal, Xiangke Chen"
+urlcolor: "blue"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+\newpage
+
+```{r global_options, include=FALSE}
+#knitr::opts_chunk$set(fig.width=7, fig.height=5, fig.align='left', warning=F, message=F)
+kable_func <- function(data) {
+  knitr::kable(data, booktabs=T, digits=2) %>%
+    kable_styling(latex_options = c('striped', 'scale_down'))
+}
+theme_ilo <- function() {
+  theme_minimal() +
+    theme(
+      text = element_text(family = "Bookman", color = "gray25"),
+      plot.subtitle = element_text(size = 10),
+      plot.caption = element_text(color = "gray30"),
+      plot.background = element_rect(fill = "gray95"),
+      plot.margin = unit(c(5, 10, 5, 10), units = "mm")
+    )
+}
+```
+
+
+# Data Quality Check
+
+```{r include = F, warning=FALSE, error=FALSE}
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(stringr)
+library(plm)
+library(zoo)
+library(fastDummies)
+library(MatchIt)
+library(tidyr)
+```
+
+Load the data set
+
+```{r}
+setwd("C:\\Users\\pardh\\Downloads\\Studies\\3-Spring\\CI\\Project")
+
+data <-read.csv("FINAL_DATA.csv")
+```
+
+**Missing Values**
+
+There are no missing values in our data.
+
+```{r}
+sum(is.na(data))
+```
+
+# Exploratory Data Analysis
+
+## Customer distribution
+
+The number of customers in each campaign are different. If these groups' attributes are different, we might need to consider using **Matching techniques** to make sure that independant variables are  balanced across campaigns.
+
+```{r}
+data_1 <- data %>% group_by(campaign) %>% 
+            summarise(num_customers = n()) %>% 
+            ungroup()
+
+ggplot(data_1, aes(x = factor(campaign), y = num_customers)) +
+        geom_bar(stat = "identity" , width=0.5, fill = rgb(0.1,0.4,0.5,0.7)) +
+        ggtitle("Fig 1 - Number of customers targeted for each campaign") +
+        geom_text(aes(label = num_customers,vjust = -0.5)) + 
+        theme(plot.title = element_text(color="black", size=10, hjust = 0.5)) +
+        theme(axis.title.y = element_blank(), axis.title.x = element_blank() )
+
+```
+
+
+## Distrbution of customers with different education background 
+
+```{r}
+data %>% group_by(education) %>% 
+  summarise(fre = n()) %>% 
+  arrange(desc(fre)) %>%
+  mutate(education=factor(education, levels=education)) %>% 
+  ggplot(aes(x = factor(education),width=0.5, y = fre)) + 
+  ggtitle("Fig 2 - Number of customers with different Education background ") +
+  geom_bar( stat = "identity",  fill = rgb(0.1,0.4,0.5,0.7)) + 
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5)) +
+  geom_text(aes(label = round(fre,2),vjust = -0.5)) + 
+   theme(axis.title.y = element_blank(), axis.title.x = element_blank() )
+
+```
+
+## Deposit rate across campaigns 
+
+
+```{r}
+# generate data for the plot
+group <- data %>% group_by(campaign) %>%
+  summarise(succ = sum(y),
+            ttl = n(),
+            ratio = succ / ttl) %>%
+  select(-succ,-ttl)
+```
+
+```{r}
+ggplot(group, aes(x = factor(campaign), y = ratio)) +
+  geom_bar(stat = "identity", width = 0.5, position = "dodge", 
+           fill = rgb(0.1,0.4,0.5,0.7)) + 
+  ggtitle('Fig 3 - Deposit Rate by campaign') + 
+  xlab("Campaign") + 
+  ylab('Success Rate') + 
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5)) +
+  ylim(0,1) + 
+  geom_text(aes(label = round(ratio,2),vjust = -0.5)) +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank())
+```
+
+## Distrbution of customers across different types of Jobs 
+
+```{r}
+data %>% group_by(job) %>% 
+  summarise(fre = n()) %>% 
+  filter(fre > 250) %>%
+  arrange(desc(fre)) %>%
+  mutate(job=factor(job, levels=job)) %>% 
+  ggplot(aes(x = factor(job),width=0.5, y = fre)) + 
+  geom_bar( stat = "identity",  fill = rgb(0.1,0.4,0.5,0.7)) + 
+  ggtitle('Fig 4 - Number of customers across different types of jobs') + 
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5)) +
+  geom_text(aes(label = round(fre,2),vjust = -0.5)) +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank())
+
+```
+
+
+## Regression before matching
+
+We are running a simple regression to check if different groups of customers behave differently across groups. 
+
+```{r warning=FALSE, message=FALSE}
+# set campaing 3 as base level
+
+data_1 = data %>% select(-cons.conf.idx, -DATE)
+data_1$campaign = as.factor(data_1$campaign)
+
+# filter data for specific campaigns
+data_c1 = data_1 %>% filter(campaign != 2)
+data_c2= data_1 %>% filter(campaign != 1)
+
+# Simple regression: C1 vs C3
+data_c1 <- within(data_c1, campaign <- relevel(campaign, ref = 3))
+mod1 = glm(y ~ campaign +                                 # Treatment vs. Control    
+             age + marital + housing + job + education +  # Demographic Factors
+             previous + poutcome + default,               # Financial Factors
+             data = data_c1, family = 'binomial')
+summary(mod1)
+
+# Simple regression: C2 vs C3
+data_c2 <- within(data_c2, campaign <- relevel(campaign, ref = 3))
+mod2 = glm(y ~ campaign +                                 # Treatment vs. Control    
+             age + marital + housing + job + education +  # Demographic Factors
+             previous + poutcome + default,               # Financial Factors
+             data = data_c2, family = 'binomial')
+summary(mod2)
+
+
+```
+
+# Matching
+
+Below we are performing some data transformations for doing regression and matching.
+
+```{r}
+# create dummy columns for categorical variables
+bank_dummy_p <- dummy_cols(data %>% select(-c("DATE", "cons.conf.idx")) )
+
+# deselect the unnecessary columns
+bank_dummy_req_cols <- bank_dummy_p %>% 
+                            select(-c('job',	'marital',	'education',
+                                      'default',	'housing',	'loan',	
+                                      'month',	'poutcome',
+                                      'job_self_employed','marital_unknown',
+                                      "default_unknown",
+                                      "loan_unknown", "loan_yes", "month_sep",
+                                      "poutcome_success"))
+
+
+# create a data frame for campaings 1 and 3
+data_13 <- bank_dummy_req_cols %>%
+                      filter(campaign %in% c(1,3)) %>%
+                      mutate(campaign = ifelse(campaign == 3, 0, 1))
+
+# create a data frame for campaings 2 and 3
+data_23 <- bank_dummy_req_cols %>%
+                      filter(campaign %in% c(2,3)) %>%
+                      mutate(campaign = ifelse(campaign == 3, 0, 1))
+
+```
+
+## Campaigns 1 vs 3
+
+Below we are trying Propensity Score matching for camapings 1 and 3 
+
+```{r}
+
+match_13 <- matchit(campaign ~ age +  previous +  job_admin +  
+                      job_technician +  job_management +  
+                      job_blue_collar +  job_retired +  job_services +  
+                      job_student + job_unknown +  job_housemaid +  
+                      job_unemployed +  job_entrepreneur +
+                      marital_divorced +  marital_married +  marital_single +  
+                      education_university_degree +  
+                      education_professional_course +  education_high_school +  
+                      education_unknown +  education_basic +  default_no +    
+                      housing_no +  housing_unknown +  housing_yes +
+                      poutcome_failure +  
+                      poutcome_nonexistent,
+                      data = data_13, ratio = 1, method = "nearest",
+                      replace = TRUE ,distance = "logit", calliper = 0.001)
+
+# Extract the matched data from matching output (m.out_2)
+matched_data_13 <- match.data(match_13)
+```
+
+Below output shows how much balance we achieved through PSM 
+
+```{r}
+
+# number of records matched
+summary(match_13)[["nn"]]
+
+# select list of Covariates to perform T test on data_23 before matching
+list_of_covariates <- c('age', 'previous', 'job_admin', 'job_technician', 
+                        'job_management', 'job_blue_collar', 'job_retired',
+                        'job_services', 'job_student', 'job_unknown', 
+                        'job_housemaid', 'job_unemployed', 'job_entrepreneur', 
+                        'marital_divorced', 'marital_married', 'marital_single', 
+                        'education_university_degree', 
+                        'education_professional_course', 'education_high_school', 
+                        'education_unknown', 'education_basic', 'default_no', 
+                        'housing_no', 'housing_unknown', 'housing_yes', 'loan_no', 
+                        'month_apr', 'month_aug', 
+                        'month_dec', 'month_jul', 'month_jun', 'month_mar', 
+                        'month_may', 'month_nov', 'month_oct', 'poutcome_failure', 
+                        'poutcome_nonexistent')
+
+# Create a dummy DataFrame to store the results of T test of data_13 before matching
+t_test_13_before <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(t_test_13_before) <- c('Covariate', 'p_value_before')
+
+# Run T test for each selected covariate
+for (covariate in list_of_covariates){
+  t <- t.test(data_13[,covariate] ~ campaign, data = data_13 )
+  t_test_13_before[nrow(t_test_13_before) + 1,] = c(covariate,round(t[["p.value"]],2))
+}
+
+
+# Create a dummy DataFrame to store the results of T test of data_13 after matching
+t_test_13_after <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(t_test_13_after) <- c('Covariate', 'p_value_after')
+
+# Run T test for each selected covariate
+for (covariate in list_of_covariates){
+  t <- t.test(matched_data_13[,covariate] ~ campaign, data = matched_data_13 )
+  t_test_13_after[nrow(t_test_13_after) + 1,] = c(covariate,round(t[["p.value"]],2))
+}
+
+merge_data_13 <- t_test_13_before %>%
+              inner_join(t_test_13_after, c("Covariate" = "Covariate")) %>%
+              filter( (p_value_before <= 0.2) & (p_value_after != 0) )
+
+print(merge_data_13)
+
+```
+
+Plot densities of propensity scores for camapaigns 1 and 3 before matching 
+
+```{r}
+# plot before matching
+pscore_before_13 = glm(campaign ~ ., data = data_13, family = "binomial" )$fitted.values
+data_13$pscore <- pscore_before_13
+
+ggplot(data_13, aes(x = pscore, col = factor(campaign))) +
+  geom_density() +
+  xlab("Propensity Score") + ylab("Density") +
+  ggtitle("Fig 5 - Before matching") +
+  theme(legend.title = element_blank()) +
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5))
+
+```
+
+Plot densities of propensity scores for camapaigns 1 and 3 after matching
+
+```{r}
+# plot after matching
+ggplot(matched_data_13, aes(x = distance, col = factor(campaign))) +
+  geom_density() +
+  xlab("Propensity Score") + ylab("Density") +
+  ggtitle("Fig 6 - After matching") +
+  theme(legend.title = element_blank()) +
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5))
+
+
+```
+
+Regression after matching 
+
+```{r}
+model_13_after <- glm( y ~ ., data = matched_data_13 %>% 
+                                select(-c( "distance", "month_apr", "month_aug", 
+                                          "month_dec",
+                                          "month_jul", "month_jun", 
+                                          "month_mar","month_may",
+                                          "month_nov", "month_oct", "loan_no"))
+                              , family = 'binomial')
+
+summary(model_13_after)
+
+```
+
+## Campaigns 2 vs 3
+
+Below we are trying Propensity Score matching for camapings 2 and 3 
+
+```{r}
+
+match_23 <- matchit(campaign ~ age +  previous +  job_admin +  
+                      job_technician +  job_management +  
+                      job_blue_collar +  job_retired +  job_services +  
+                      job_student + job_unknown +  job_housemaid +  
+                      job_unemployed +  job_entrepreneur +
+                      marital_divorced +  marital_married +  
+                      marital_single +  education_university_degree +  
+                      education_professional_course +  education_high_school +  
+                      education_unknown +  education_basic +  default_no +    
+                      housing_no +  housing_unknown +  housing_yes +
+                      poutcome_failure +  poutcome_nonexistent,
+                      data = data_23, ratio = 1, method = "nearest",
+                      replace = TRUE ,distance = "logit", calliper = 0.02)
+
+# Extract the matched data from matching output (m.out_2)
+matched_data_23 <- match.data(match_23)
+```
+
+Below output shows how much balance we achieved through PSM 
+
+```{r}
+# number of records matched
+summary(match_23)[["nn"]]
+
+
+# Create a dummy DataFrame to store the results of T test of data_13 before matching
+t_test_23_before <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(t_test_23_before) <- c('Covariate', 'p_value_before')
+
+# Run T test for each selected covariate
+for (covariate in list_of_covariates){
+  t <- t.test(data_23[,covariate] ~ campaign, data = data_23 )
+  t_test_23_before[nrow(t_test_23_before) + 1,] = c(covariate,round(t[["p.value"]],2))
+}
+
+
+# Create a dummy DataFrame to store the results of T test of data_13 after matching
+t_test_23_after <- data.frame(matrix(ncol = 2, nrow = 0))
+colnames(t_test_23_after) <- c('Covariate', 'p_value_after')
+
+# Run T test for each selected covariate
+for (covariate in list_of_covariates){
+  t <- t.test(matched_data_23[,covariate] ~ campaign, data = matched_data_23 )
+  t_test_23_after[nrow(t_test_23_after) + 1,] = c(covariate,round(t[["p.value"]],2))
+}
+
+merge_data_23 <- t_test_23_before %>%
+              inner_join(t_test_23_after, c("Covariate" = "Covariate")) %>%
+              filter( (p_value_before <= 0.2) & (p_value_after != 0) )
+
+print(merge_data_23)
+
+```
+
+Plot densities of propensity scores for camapaigns 1 and 3 before matching 
+
+```{r}
+# plot before matching
+pscore_before_23 = glm(campaign ~ ., data = data_23, 
+                       family = "binomial" )$fitted.values
+data_23$pscore <- pscore_before_23
+
+ggplot(data_23, aes(x = pscore, col = factor(campaign))) +
+  geom_density() +
+  xlab("Propensity Score") + ylab("Density") +
+  ggtitle("Fig 7 - Before matching") +
+  theme(legend.title = element_blank()) +
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5))
+
+```
+
+Plot densities of propensity scores for camapaigns 1 and 3 after matching
+
+```{r}
+# plot after matching
+ggplot(matched_data_23, aes(x = distance, col = factor(campaign))) +
+  geom_density() +
+  xlab("Propensity Score") + ylab("Density") +
+  ggtitle("Fig 8 - After matching") +
+  theme(legend.title = element_blank()) +
+  theme(plot.title = element_text(color="black", size=10, hjust = 0.5))
+
+
+```
+
+Regression after matching 
+
+```{r}
+
+
+model_23_after <- glm( y ~ ., data = matched_data_23 %>% 
+                                select(-c( "distance", "month_apr", "month_aug", 
+                                          "month_dec",
+                                          "month_jul", "month_jun", 
+                                          "month_mar","month_may",
+                                          "month_nov", "month_oct", "loan_no"))
+                              , family = 'binomial')
+
+summary(model_23_after)
+
+```
+
+
+## Heterogeneity between campaigns 1 and 3 after matching the data
+
+```{r}
+
+# create a row number
+matched_data_13_r <- matched_data_13 %>% mutate(id = row_number())
+
+# converting education dummy columns in to a single column
+edu_list <- c("id","education_basic", "education_high_school", 
+              "education_professional_course",
+              "education_university_degree", "education_unknown")
+
+
+matched_data_13_edu <- matched_data_13_r %>% select(edu_list) %>%
+                        gather("education", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(education = str_replace(education,"education_",""))
+
+# converting Job dummy columns in to a single column
+job_list <- c("id","job_admin", "job_blue_collar", "job_entrepreneur",
+              "job_housemaid", "job_management", "job_retired", 
+              "job_services", "job_student", "job_technician", 
+              "job_unemployed", "job_unknown")
+
+matched_data_13_job <- matched_data_13_r %>% select(job_list) %>%
+                        gather("job", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(job = str_replace(job,"job_",""))
+
+# converting marital status dummy columns in to a single column
+mar_status <- c("id","marital_divorced", "marital_married", "marital_single")
+
+matched_data_13_mar <- matched_data_13_r %>% select(mar_status) %>%
+                        gather("marital_status", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(marital_status = str_replace(marital_status,"marital_",""))
+
+# converting Housing  dummy columns in to a single column
+hous_list <- c("id","housing_no", "housing_yes", "housing_unknown")
+
+matched_data_13_hous <- matched_data_13_r %>% select(hous_list) %>%
+                        gather("housing", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(housing = str_replace(housing,"housing_",""))
+
+# converting poutcome  dummy columns in to a single column
+pout_list <- c("id","poutcome_failure", "poutcome_nonexistent")
+
+matched_data_13_pout <- matched_data_13_r %>% select(pout_list) %>%
+                        gather("poutcome", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(poutcome = str_replace(poutcome,"poutcome_",""))
+
+# Merge all data frames into a single data frame
+merged_het_13_after <- matched_data_13_r %>%
+                    select("id","y" ,"age", "campaign", "previous", 
+                           "default_no", "weights") %>%
+                    left_join(matched_data_13_edu, c("id" = "id")) %>%
+                    left_join(matched_data_13_job, c("id" = "id")) %>%
+                    left_join(matched_data_13_mar, c("id" = "id")) %>%
+                    left_join(matched_data_13_hous, c("id" = "id")) %>%
+                    left_join(matched_data_13_pout, c("id" = "id"))
+
+# C1 vs C3 heterogeneity
+
+merged_het_13_after$job <- as.factor(merged_het_13_after$job)
+merged_het_13_after <- within(merged_het_13_after, job <- relevel(job, ref = 2))
+
+# check if any ionteraction terms are significant
+mod_het_13_after = glm(y ~ campaign +                                             
+                           age + marital_status + housing + job + education +  
+                           previous + poutcome + default_no + job*campaign,    
+                           data = merged_het_13_after, family = 'binomial')
+
+summary(mod_het_13_after)
+```
+
+
+## Heterogeneity between campaigns 2 and 3 after matching the data
+
+```{r}
+
+# create a row number
+matched_data_23_r <- matched_data_23 %>% mutate(id = row_number())
+
+# converting education dummy columns in to a single column
+matched_data_23_edu <- matched_data_23_r %>% select(edu_list) %>%
+                        gather("education", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(education = str_replace(education,"education_",""))
+
+# converting Job dummy columns in to a single column
+matched_data_23_job <- matched_data_23_r %>% select(job_list) %>%
+                        gather("job", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(job = str_replace(job,"job_",""))
+
+# converting marital status dummy columns in to a single column
+matched_data_23_mar <- matched_data_23_r %>% select(mar_status) %>%
+                        gather("marital_status", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(marital_status = str_replace(marital_status,"marital_",""))
+
+# converting Housing dummy columns in to a single column
+matched_data_23_hous <- matched_data_23_r %>% select(hous_list) %>%
+                        gather("housing", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(housing = str_replace(housing,"housing_",""))
+
+# converting poutcome dummy columns in to a single column
+matched_data_23_pout <- matched_data_23_r %>% select(pout_list) %>%
+                        gather("poutcome", "value", -id ) %>%
+                        filter(value == 1) %>%
+                        select(-value) %>%
+                        mutate(poutcome = str_replace(poutcome,"poutcome_",""))
+
+# merging all dataframes into a single data frame
+merged_het_23_after <- matched_data_23_r %>%
+                    select("id","y" ,"age", "campaign", "previous", "default_no", "weights") %>%
+                    left_join(matched_data_23_edu, c("id" = "id")) %>%
+                    left_join(matched_data_23_job, c("id" = "id")) %>%
+                    left_join(matched_data_23_mar, c("id" = "id")) %>%
+                    left_join(matched_data_23_hous, c("id" = "id")) %>%
+                    left_join(matched_data_23_pout, c("id" = "id"))
+
+# C2 vs C3 heterogeneity
+merged_het_23_after$job <- as.factor(merged_het_23_after$job)
+merged_het_23_after <- within(merged_het_23_after, job <- relevel(job, ref = 2))
+
+# check if any ionteraction terms are significant
+mod_het_23_after = glm(y ~ campaign +                                              
+                           age + marital_status + housing + job + education +     
+                           previous + poutcome + default_no + job*campaign, 
+                           data = merged_het_23_after, family = 'binomial')
+
+summary(mod_het_23_after)
+
+```
+
+
+# Difference in Difference
+
+Data preparation 
+
+```{r}
+# Make sure date is in correct form
+data <- data %>% mutate(DATE = mdy(DATE))
+
+
+# Implement resignation date
+resignation_date <- mdy('07-03-2009')
+data <- data %>% mutate(after = ifelse(DATE > resignation_date, 1, 0))
+
+
+# Month-by-month success of each campaign
+df <- data %>% group_by(per_year = year(DATE), 
+                        per_month = month(DATE), 
+                        campaign = factor(campaign)) %>% 
+  summarize(averaging = mean(y),
+            counting = n())
+
+
+# Make easier to plot
+df$Date <- as.yearmon(paste(df$per_year, df$per_month), "%Y %m")
+
+```
+
+
+Analyse call success rate across time before and after the news
+
+```{r, warning=FALSE, message=FALSE}
+ggplot(data=df, aes(x=Date, y = averaging, color = campaign)) +
+  geom_line() + ylim(0,1) + 
+  xlab("Months") + ylab("% of campaign calls that were successful") +
+  ggtitle('Fig 9 - July 3, 2009 - Prime Minister Resigns') + 
+  geom_vline(xintercept = as.numeric(df$Date[38]), linetype=4, colour="red") + 
+  theme_ilo()
+```
+
+
+## Regression for Difference in Difference
+
+```{r}
+# setting campaign 3 as reference
+data$campaign <- factor(data$campaign)
+data <- within(data, campaign <- relevel(campaign, ref = 3))
+
+# Set camapign 3 as 0 and rest of the campaigns as 1
+data_123 <- data %>% 
+  mutate(treat = ifelse(campaign == 3, 0, 1))
+
+# setting campaign 3 as reference
+data_123 <- within(data_123, campaign <- relevel(campaign, ref = 3))
+data_123$treat <- factor(data_123$treat)
+
+# DiD regresion to chech the impact on campaings after the news
+did_one <- glm(y ~ treat + after + treat * after, 
+               data = data_123, family = "binomial")
+
+summary(did_one)
+
+```
+
+## Placebo effect
+
+We wanted to move the resignation date of president few months back artificially and check the treatment effect
+
+```{r}
+
+# moving the prime minister resigantion data 3 months prior
+resignation_plc_date <- mdy('04-03-2009')
+
+data_placebo = data_123 %>%
+                mutate(after_placebo = ifelse(DATE > resignation_plc_date, 1, 0))
+
+# DiD with placebo data
+did_basic_placebo_one = glm(y ~ treat + after_placebo + treat * after_placebo, 
+                             data = data_placebo, 
+                             family = "binomial")
+
+summary(did_basic_placebo_one)
+
+```
+
+
+
